@@ -1,4 +1,13 @@
 # AI Token
+<img width="257" height="64" alt="image" src="https://github.com/user-attachments/assets/9ae74a0a-e549-4c79-915c-230072acf08f" />
+<img width="765" height="760" alt="image" src="https://github.com/user-attachments/assets/1cbeabf5-367f-4c0d-a706-0db66853fb04" />
+# Beta 0.1.0
+## 현재 기능 구성 Claude,OpenAI
+### 1. 메뉴 축소화 가능(윈도우 기준 우측하단 시계,날씨 정보 왼쪽에 볼 수 있도록 미니바 기능)
+### 2. 설정에서 조회 간격 조절 가능
+
+## Token 조회 조건
+### 1. Codex, Claude Code 처럼 앱이  실행 되어있어야한다. (웹 사용자가 아닌 Codex 앱과 같이 앱 사용자를 위한 기능)
 
 AI 구독의 잔여 한도를 표시하는 Windows 우선 트레이 앱. Rust + Tauri 2 + TypeScript로 구성한다.
 

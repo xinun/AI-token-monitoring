@@ -1,4 +1,12 @@
 # AI Token
+## how to install 
+-> release: https://github.com/xinun/AI-token-monitoring/releases/tag/v0.1.0
+
+<img width="529" height="685" alt="image" src="https://github.com/user-attachments/assets/932c913d-a5c3-44c3-8f23-98965e8dc0f6" />
+
+---
+# Preview
+
 <img width="257" height="64" alt="image" src="https://github.com/user-attachments/assets/9ae74a0a-e549-4c79-915c-230072acf08f" />
 <img width="765" height="760" alt="image" src="https://github.com/user-attachments/assets/1cbeabf5-367f-4c0d-a706-0db66853fb04" />
 

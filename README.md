@@ -41,7 +41,7 @@ npm run tauri -- dev
 
 트레이 아이콘을 클릭하면 상세 창이 열린다. 우클릭 메뉴에서 종료할 수 있다. 처음부터 창을 열려면 `npm run tauri -- dev -- --show`를 사용한다.
 
-Rust가 PATH에 등록되지 않은 Windows 환경에서는 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1`로 개발 실행할 수 있다. 실행 파일 빌드는 `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`를 사용한다.
+Rust가 PATH에 등록되지 않은 Windows 환경에서는 `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1`로 개발 실행할 수 있다.
 
 ```powershell
 npm test
@@ -51,6 +51,30 @@ cargo test
 ```
 
 브라우저 화면만 확인하려면 `npm run dev` 후 `http://127.0.0.1:1420`에 접속한다. 브라우저 모드에서는 실제 계정 정보를 조회하지 않는다.
+
+## 빌드와 배포
+
+```powershell
+npm run build:desktop
+```
+
+Windows x64 배포용 EXE를 빌드하고 프로젝트의 `release/` 폴더에 실행 파일과 ZIP을 준비한다. `package.json`의 버전을 파일 이름에 사용한다.
+
+```text
+release/
+  AI-Token-0.1.0-windows-x64.zip
+  AI-Token-0.1.0-windows-x64/
+    ai-token.exe
+    README.txt
+    BRAND_ASSETS.md
+    LICENSE
+```
+
+GitHub Releases에는 ZIP을 직접 첨부한다. `release/`, `dist/`, `src-tauri/target/`는 Git에서 제외하며 로컬 결과물은 그대로 보관한다. 기존 빌드 파일만 다시 묶으려면 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1`를 실행한다. ZIP에는 앱 설정이나 로그인 정보를 넣지 않는다.
+
+같은 버전의 배포 폴더에서 AI Token을 실행 중이면 앱을 종료한 뒤 빌드한다. 실행 중인 EXE는 Windows에서 덮어쓸 수 없다.
+
+빌드 캐시와 임시 백업은 `npm run clean`으로 정리한다. `dist/`, `src-tauri/target/`, 자동 생성 스키마와 `.tools/`를 삭제하며, 소스·개발 의존성·`release/`의 배포 파일은 유지한다. 다음 빌드는 캐시를 다시 생성하므로 시간이 더 걸릴 수 있다.
 
 ## 갱신 방식
 

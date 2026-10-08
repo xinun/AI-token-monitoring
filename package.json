@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
+    "build:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
+    "clean": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clean.ps1",
     "tauri": "tauri",
     "test": "node --test scripts/*.test.mjs",
     "probe:codex": "node scripts/probe-codex.mjs",

@@ -2,8 +2,11 @@ node_modules/
 dist/
 src-tauri/target/
 /src-tauri/gen/schemas/
-/release/
 .tools/
 *.log
+*.key
 .env*
 !.env.example
+PLAN.md
+BRAND_ASSETS.md
+release/

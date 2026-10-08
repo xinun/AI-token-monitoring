@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
+const appVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 // No inference, auth-token reads, full response dumps, or transcript access.
 const child = spawn(process.env.AI_TOKEN_CODEX_PATH || 'codex', ['app-server', '--stdio', '-c', 'analytics.enabled=false'], {
@@ -35,4 +37,4 @@ lines.on('line', line => {
     finish({ ok: windows.length > 0, source: 'Codex app-server', windows });
   }
 });
-send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ai_token_probe', title: 'AI Token connection check', version: '0.1.0' } } });
+send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ai_token_probe', title: 'AI Token connection check', version: appVersion } } });

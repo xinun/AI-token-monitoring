@@ -4,5 +4,6 @@ mod model;
 mod providers;
 mod runtime;
 mod minibar;
+mod updates;
 
 fn main() { runtime::run(); }

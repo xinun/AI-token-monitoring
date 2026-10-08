@@ -62,7 +62,7 @@ pub async fn fetch_codex() -> ProviderState {
     let result = timeout(Duration::from_secs(20), async {
         let mut input = child.stdin.take().ok_or("Codex 입력 연결 실패")?;
         let mut output = BufReader::new(child.stdout.take().ok_or("Codex 출력 연결 실패")?);
-        let init = json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ai_token", "title": "AI Token", "version": "0.1.0"}}});
+        let init = json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ai_token", "title": "AI Token", "version": env!("CARGO_PKG_VERSION")}}});
         input.write_all(format!("{}\n", init).as_bytes()).await.map_err(|_| "Codex 초기화 실패")?;
         read_response(&mut output, 1).await?;
         input.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n{\"id\":2,\"method\":\"account/rateLimits/read\"}\n").await.map_err(|_| "Codex 조회 요청 실패")?;

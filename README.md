@@ -2,10 +2,11 @@
 <img width="257" height="64" alt="image" src="https://github.com/user-attachments/assets/9ae74a0a-e549-4c79-915c-230072acf08f" />
 <img width="765" height="760" alt="image" src="https://github.com/user-attachments/assets/1cbeabf5-367f-4c0d-a706-0db66853fb04" />
 
-# Beta 0.1.0
+# Beta 0.2.0
 ## 현재 기능 구성 Claude,OpenAI
 ### 1. 메뉴 축소화 가능(윈도우 기준 우측하단 시계,날씨 정보 왼쪽에 볼 수 있도록 미니바 기능)
 ### 2. 설정에서 조회 간격 조절 가능
+### 3. 종 아이콘에서 새 버전 확인, 릴리즈 페이지 열기 및 승인 후 업데이트 설치
 
 ## Token 조회 조건
 ### 1. Codex, Claude Code 처럼 앱이  실행 되어있어야한다. (웹 사용자가 아닌 Codex 앱과 같이 앱 사용자를 위한 기능)
@@ -22,9 +23,10 @@ AI 구독의 잔여 한도를 표시하는 Windows 우선 트레이 앱. Rust + 
 - 5/10/15분 자동 조회, 실패 시 간격 증가, 수동 갱신
 - 기본 실행은 트레이와 선택한 미니바 생성. 상세 창은 클릭 시 생성하고 닫으면 제거
 - 브라우저 미리보기의 예시 데이터는 명시적으로 켰을 때만 표시
+- 앱 시작 시와 6시간 간격으로 새 버전 확인, 종 아이콘 알림, 사용자가 선택할 때 서명 검증 후 설치·재시작
 - Antigravity / Grok는 아직 미연동. 잔여 한도는 확인 불가로 표시
 
-서비스 아이콘은 공식 사이트/CDN에서 받은 이미지다. 출처는 `BRAND_ASSETS.md`에 기록했다. AI Token은 각 서비스와 제휴하지 않은 독립 앱이다. 알림, 자동 시작, 전용 절전 이벤트 처리, 설치 패키징과 macOS 실행 검증은 후속 작업이다. 현재 30초 메타데이터 검사로 Claude 전달 파일 변경을 감지한다. CPU·메모리 목표 달성 여부는 실제 측정이 필요하다.
+서비스 아이콘은 공식 사이트/CDN에서 받은 이미지다. 출처는 `BRAND_ASSETS.md`에 기록했다. AI Token은 각 서비스와 제휴하지 않은 독립 앱이다. 자동 시작, 전용 절전 이벤트 처리와 macOS 실행 검증은 후속 작업이다. 현재 30초 메타데이터 검사로 Claude 전달 파일 변경을 감지한다. CPU·메모리 목표 달성 여부는 실제 측정이 필요하다.
 
 ## Windows 미니바
 
@@ -40,7 +42,7 @@ AI 구독의 잔여 한도를 표시하는 Windows 우선 트레이 앱. Rust + 
 
 ## 개발 환경
 
-Node.js LTS, Rust stable (MSVC), Microsoft C++ Build Tools의 Desktop development with C++ 구성요소, WebView2가 필요하다.
+Node.js LTS, Rust 1.90 이상 stable (MSVC), Microsoft C++ Build Tools의 Desktop development with C++ 구성요소, WebView2가 필요하다.
 
 ```powershell
 npm install
@@ -65,26 +67,44 @@ cargo test
 ## 빌드와 배포
 
 ```powershell
+npm run updater:key
 npm run build:desktop
 ```
 
-Windows x64 배포용 EXE를 빌드하고 프로젝트의 `release/` 폴더에 실행 파일과 ZIP을 준비한다. `package.json`의 버전을 파일 이름에 사용한다.
+`updater:key`는 빌드 PC에서 최초 한 번 실행한다. 개인키는 `%LOCALAPPDATA%\AI Token Build\updater.key`에 저장하며, 공개키 파일의 내용만 `src-tauri/tauri.conf.json`의 `plugins.updater.pubkey`에 넣는다. 이 PC는 공개키 설정까지 완료했다. 다른 PC에서 빌드하려면 기존 개인키를 개인 백업에서 복원한다. 개인키를 GitHub나 릴리즈에 올리지 않으며, 이후 배포에서도 같은 키를 사용한다.
+
+Windows x64 설치형 EXE와 포터블 ZIP을 빌드하고 프로젝트의 `release/` 폴더에 준비한다. `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`의 버전을 함께 변경한다. 자동 업데이트 서명은 앱 버전에도 연결된다.
 
 ```text
 release/
-  AI-Token-0.1.0-windows-x64.zip
-  AI-Token-0.1.0-windows-x64/
+  AI-Token-0.2.0-windows-x64-setup.exe
+  AI-Token-0.2.0-windows-x64-setup.exe.sig
+  latest.json
+  AI-Token-0.2.0-windows-x64.zip
+  AI-Token-0.2.0-windows-x64/
     ai-token.exe
     README.txt
     BRAND_ASSETS.md
     LICENSE
 ```
 
-GitHub Releases에는 ZIP을 직접 첨부한다. `release/`, `dist/`, `src-tauri/target/`는 Git에서 제외하며 로컬 결과물은 그대로 보관한다. 기존 빌드 파일만 다시 묶으려면 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1`를 실행한다. ZIP에는 앱 설정이나 로그인 정보를 넣지 않는다.
+GitHub Releases에는 설치 파일, `.sig`, `latest.json` 세 파일을 함께 첨부한다. 포터블 ZIP은 추가 선택 사항이다. `release/`, `dist/`, `src-tauri/target/`는 Git에서 제외하며 로컬 결과물은 그대로 보관한다. 기존 빌드 파일만 다시 묶으려면 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1`를 실행한다. 배포 파일에는 앱 설정이나 로그인 정보를 넣지 않는다.
 
 같은 버전의 배포 폴더에서 AI Token을 실행 중이면 앱을 종료한 뒤 빌드한다. 실행 중인 EXE는 Windows에서 덮어쓸 수 없다.
 
 빌드 캐시와 임시 백업은 `npm run clean`으로 정리한다. `dist/`, `src-tauri/target/`, 자동 생성 스키마와 `.tools/`를 삭제하며, 소스·개발 의존성·`release/`의 배포 파일은 유지한다. 다음 빌드는 캐시를 다시 생성하므로 시간이 더 걸릴 수 있다.
+
+## 앱 업데이트
+
+자동 업데이트를 쓰려면 `AI-Token-0.2.0-windows-x64-setup.exe`로 설치한다. 0.1.0은 업데이트 기능이 없으므로 처음 한 번은 직접 설치한다. 같은 앱 식별자와 앱 데이터 경로를 유지하므로 기존 연결 설정과 미니바 위치를 사용한다.
+
+앱 시작 시와 6시간 간격으로 작은 버전 안내 파일을 읽는다. 종 아이콘에서 수동 확인할 수 있고, 수동 확인은 1분 간격이다. 새 버전이 있으면 배지가 나타난다. 알림 창의 **릴리즈 페이지 보기**로 브라우저에서 변경 사항을 확인하고 직접 다운로드할 수 있다. 확인된 새 버전이 없을 때는 최신 릴리즈 페이지를 연다. 페이지를 여는 동작은 앱 내 설치를 시작하지 않는다.
+
+앱에서 설치하려면 **업데이트 설치 → 승인하고 설치**를 누른다. 승인하기 전에는 설치 파일을 다운로드하지 않는다. 승인한 버전과 파일의 서명을 검증한 후 설치 프로그램을 실행하고, Windows 설치 프로그램이 앱을 다시 실행한다. 확인 도중 버전 정보가 바뀌면 다시 승인을 받는다. 실패 시 알림에서 재시도할 수 있다. 자동 확인은 설정에서 끌 수 있다.
+
+GitHub 자동 업데이트 채널은 **정식 릴리즈**를 확인한다. `v0.2.0`처럼 버전 태그를 지정하고 `Release label: None`, 최신 릴리즈로 게시한다. `Pre-release`나 초안은 이 채널에서 제외된다. 태그, `latest.json`의 버전과 다운로드 파일 이름을 빌드 버전과 맞춘다. 이후 `0.2.1` 배포도 같은 절차로 세 파일을 함께 올린다. 업데이트 파일을 준비하기 전에는 최신 버전이라고 표시하지 않는다.
+
+빌드 검증은 `npm test`, `cargo test --manifest-path src-tauri/Cargo.toml`로 수행한다. 설치 파일을 만든 뒤 `cargo test --manifest-path src-tauri/Cargo.toml --test updater_artifact -- --ignored --test-threads=1`로 정상 서명, 변조 파일, 버전 바꿔치기 거부를 검증한다. 이 검증은 설치 프로그램을 실행하지 않는다.
 
 ## 갱신 방식
 

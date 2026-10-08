@@ -1,12 +1,13 @@
 {
   "name": "ai-token",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
     "build:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
+    "updater:key": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-updater-key.ps1",
     "clean": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clean.ps1",
     "tauri": "tauri",
     "test": "node --test scripts/*.test.mjs",

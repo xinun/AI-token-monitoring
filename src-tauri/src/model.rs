@@ -55,10 +55,11 @@ pub struct Settings {
     pub mini_locked: bool,
     pub mini_x: Option<i32>,
     pub mini_y: Option<i32>,
+    pub update_check_enabled: bool,
 }
 
 impl Default for Settings {
-    fn default() -> Self { Self { codex_enabled: true, claude_enabled: false, refresh_minutes: 5, mini_enabled: true, mini_providers: vec!["codex".into()], mini_locked: true, mini_x: None, mini_y: None } }
+    fn default() -> Self { Self { codex_enabled: true, claude_enabled: false, refresh_minutes: 5, mini_enabled: true, mini_providers: vec!["codex".into()], mini_locked: true, mini_x: None, mini_y: None, update_check_enabled: true } }
 }
 
 impl Settings {
@@ -80,6 +81,7 @@ pub struct Snapshot {
     pub refreshing: bool,
     pub claude_path: String,
     pub bridge_command: String,
+    pub updates: crate::updates::UpdateState,
 }
 
 #[cfg(test)]

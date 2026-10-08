@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dashboard",
+  "description": "Only the local quota dashboard",
+  "windows": ["dashboard"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

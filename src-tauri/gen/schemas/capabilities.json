@@ -1,0 +1,1 @@
+{"dashboard":{"identifier":"dashboard","description":"Only the local quota dashboard","local":true,"windows":["dashboard"],"permissions":["core:default","core:window:allow-close"]}}

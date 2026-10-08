@@ -1,6 +1,7 @@
 # AI Token
 <img width="257" height="64" alt="image" src="https://github.com/user-attachments/assets/9ae74a0a-e549-4c79-915c-230072acf08f" />
 <img width="765" height="760" alt="image" src="https://github.com/user-attachments/assets/1cbeabf5-367f-4c0d-a706-0db66853fb04" />
+
 # Beta 0.1.0
 ## 현재 기능 구성 Claude,OpenAI
 ### 1. 메뉴 축소화 가능(윈도우 기준 우측하단 시계,날씨 정보 왼쪽에 볼 수 있도록 미니바 기능)

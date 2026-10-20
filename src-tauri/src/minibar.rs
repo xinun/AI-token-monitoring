@@ -47,7 +47,8 @@ mod platform {
     unsafe fn geometry(hwnd: HWND, s: &Snapshot) -> (i32, i32, i32, i32, bool) {
         let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
         let px = |v: i32| (v as f64 * scale).round() as i32;
-        let width = px(16 + 132 * s.settings.mini_providers.len() as i32);
+        let displayed = s.visible_mini_providers();
+        let width = px(16 + 132 * displayed.len() as i32);
         let height = px(40);
         let tray = FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
         let mut rect: RECT = std::mem::zeroed();
@@ -66,9 +67,9 @@ mod platform {
         GetMonitorInfoW(monitor, &mut info);
         x = x.clamp(info.rcMonitor.left, (info.rcMonitor.right-width).max(info.rcMonitor.left));
         y = y.clamp(info.rcMonitor.top, (info.rcMonitor.bottom-height).max(info.rcMonitor.top));
-        // Stay visible until the user disables the bar. Geometry/focus changes
-        // must never turn a persisted enabled setting into an automatic hide/show cycle.
-        let visible = s.settings.mini_enabled && !s.settings.mini_providers.is_empty();
+        // Visibility depends only on explicit settings and optional process detection,
+        // never on focus/fullscreen geometry (which caused flickering previously).
+        let visible = !displayed.is_empty();
         (x, y, width, height, visible)
     }
 
@@ -123,10 +124,10 @@ mod platform {
         SetTextColor(dc,0x00889988);
         let mut grip = RECT { left:px(2),top:0,right:px(14),bottom:area.bottom };
         DrawTextW(dc,wide(if s.settings.mini_locked { "·" } else { "⋮" }).as_ptr(),-1,&mut grip,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-        for (index,id) in s.settings.mini_providers.iter().enumerate() {
+        for (index,id) in s.visible_mini_providers().into_iter().enumerate() {
             let left = px(16+index as i32*132);
             logo(dc,id,left,px(8),px(24));
-            let lines = crate::model::mini_lines(s.providers.iter().find(|p| &p.id==id), now());
+            let lines = crate::model::mini_lines(s.providers.iter().find(|p| p.id==id), now());
             for (row,(text,low)) in lines.iter().enumerate() {
                 SetTextColor(dc,if *low { 0x008ec0ff } else { 0x00ecf0ed });
                 let mut r = RECT { left:left+px(32),top:px(2+row as i32*18),right:left+px(128),bottom:px(20+row as i32*18) };

@@ -51,15 +51,17 @@ pub struct Settings {
     pub claude_enabled: bool,
     pub refresh_minutes: u64,
     pub mini_enabled: bool,
+    pub mini_only_when_running: bool,
     pub mini_providers: Vec<String>,
     pub mini_locked: bool,
     pub mini_x: Option<i32>,
     pub mini_y: Option<i32>,
     pub update_check_enabled: bool,
+    pub launch_at_login: bool,
 }
 
 impl Default for Settings {
-    fn default() -> Self { Self { codex_enabled: true, claude_enabled: false, refresh_minutes: 5, mini_enabled: true, mini_providers: vec!["codex".into()], mini_locked: true, mini_x: None, mini_y: None, update_check_enabled: true } }
+    fn default() -> Self { Self { codex_enabled: true, claude_enabled: false, refresh_minutes: 5, mini_enabled: true, mini_only_when_running: false, mini_providers: vec!["codex".into()], mini_locked: true, mini_x: None, mini_y: None, update_check_enabled: true, launch_at_login: false } }
 }
 
 impl Settings {
@@ -69,6 +71,9 @@ impl Settings {
         let mut seen = std::collections::HashSet::new();
         if self.mini_providers.iter().any(|id| !seen.insert(id)) { return Err("표시 항목이 중복되었습니다.".into()); }
         if self.mini_enabled && self.mini_providers.is_empty() { return Err("미니바에 표시할 AI를 하나 이상 선택하세요.".into()); }
+        if self.mini_enabled && self.mini_only_when_running && !self.mini_providers.iter().any(|id| ["codex", "claude"].contains(&id.as_str())) {
+            return Err("실행 중 자동 표시에는 Codex나 Claude를 하나 이상 선택하세요.".into());
+        }
         Ok(())
     }
 }
@@ -82,6 +87,16 @@ pub struct Snapshot {
     pub claude_path: String,
     pub bridge_command: String,
     pub updates: crate::updates::UpdateState,
+    pub running_providers: Vec<String>,
+}
+
+impl Snapshot {
+    pub fn visible_mini_providers(&self) -> Vec<&str> {
+        if !self.settings.mini_enabled { return vec![]; }
+        self.settings.mini_providers.iter()
+            .filter(|id| !self.settings.mini_only_when_running || self.running_providers.contains(id))
+            .map(String::as_str).collect()
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +139,7 @@ mod mini_tests {
         let s: Settings = serde_json::from_str(r#"{"codexEnabled":false,"claudeEnabled":true,"refreshMinutes":10}"#).unwrap();
         assert!(!s.codex_enabled); assert!(s.claude_enabled); assert_eq!(s.refresh_minutes,10);
         assert_eq!(s.mini_providers,vec!["codex"]); assert!(s.validate().is_ok());
+        assert!(!s.mini_only_when_running); assert!(!s.launch_at_login);
     }
     #[test] fn selections_are_validated() {
         let mut s = Settings::default(); s.mini_providers = vec!["unknown".into()]; assert!(s.validate().is_err());
@@ -136,5 +152,27 @@ mod mini_tests {
         assert_eq!(mini_lines(Some(&p),20),vec![("5시간 70%".into(),false),("주간 10%".into(),true)]);
         assert_eq!(mini_lines(Some(&p),100)[0].0,"5시간 —");
         assert_eq!(mini_lines(Some(&p),1000)[1].0,"주간 —");
+    }
+    #[test] fn auto_visibility_filters_selected_services_and_respects_manual_off() {
+        let mut snapshot = Snapshot { providers: vec![], settings: Settings::default(), refreshing: false, claude_path: String::new(), bridge_command: String::new(), updates: crate::updates::UpdateState::default(), running_providers: vec![] };
+        assert_eq!(snapshot.visible_mini_providers(), ["codex"]);
+        snapshot.settings.mini_only_when_running = true;
+        assert!(snapshot.visible_mini_providers().is_empty());
+        snapshot.running_providers = vec!["codex".into(), "claude".into()];
+        assert_eq!(snapshot.visible_mini_providers(), ["codex"]);
+        snapshot.settings.mini_providers.push("claude".into());
+        assert_eq!(snapshot.visible_mini_providers(), ["codex", "claude"]);
+        snapshot.running_providers.remove(0);
+        assert_eq!(snapshot.visible_mini_providers(), ["claude"]);
+        snapshot.settings.mini_enabled = false;
+        assert!(snapshot.visible_mini_providers().is_empty());
+    }
+    #[test] fn unsupported_only_selection_cannot_enable_process_visibility() {
+        let mut settings = Settings::default();
+        settings.mini_only_when_running = true;
+        settings.mini_providers = vec!["grok".into()];
+        assert!(settings.validate().is_err());
+        settings.mini_providers.push("codex".into());
+        assert!(settings.validate().is_ok());
     }
 }

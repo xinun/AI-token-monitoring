@@ -3,7 +3,7 @@ export interface ProviderState {
   id: string; status: string; message: string; windows: QuotaWindow[];
   fetchedAt: number | null; source: string;
 }
-export interface Settings { codexEnabled: boolean; claudeEnabled: boolean; refreshMinutes: number; miniEnabled: boolean; miniProviders: string[]; miniLocked: boolean; miniX: number | null; miniY: number | null; updateCheckEnabled: boolean }
+export interface Settings { codexEnabled: boolean; claudeEnabled: boolean; refreshMinutes: number; miniEnabled: boolean; miniOnlyWhenRunning: boolean; miniProviders: string[]; miniLocked: boolean; miniX: number | null; miniY: number | null; updateCheckEnabled: boolean; launchAtLogin: boolean }
 export interface UpdateState {
   currentVersion: string;
   availableVersion: string | null;
@@ -16,6 +16,6 @@ export interface UpdateState {
   totalBytes: number | null;
 }
 export interface Snapshot {
-  providers: ProviderState[]; settings: Settings; refreshing: boolean;
+  providers: ProviderState[]; settings: Settings; refreshing: boolean; runningProviders: string[];
   claudePath: string; bridgeCommand: string; updates: UpdateState;
 }

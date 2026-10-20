@@ -1,4 +1,4 @@
-use crate::{model::{now, ProviderState, Settings, Snapshot, PROVIDERS}, providers, updates};
+use crate::{model::{now, ProviderState, Settings, Snapshot, PROVIDERS}, presence, providers, startup, updates};
 use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_opener::OpenerExt;
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ struct Inner {
     update_gate: tokio::sync::Mutex<()>,
     pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
     last_update_attempt: AtomicU64,
+    settings_gate: Mutex<()>,
 }
 type Shared = Arc<Inner>;
 
@@ -99,7 +100,29 @@ async fn refresh(app: tauri::AppHandle, state: Shared, force: bool) {
 }
 
 #[tauri::command]
-fn get_snapshot(state: tauri::State<'_, Shared>) -> Snapshot { state.snapshot.lock().unwrap().clone() }
+fn get_snapshot(state: tauri::State<'_, Shared>) -> Snapshot {
+    // Read the OS registration; do not silently enable it from an old settings file.
+    let _guard = state.settings_gate.lock().unwrap();
+    let enabled = startup::registration().ok().map(|entry| entry.is_some());
+    let mut snapshot = state.snapshot.lock().unwrap();
+    if let Some(enabled) = enabled { snapshot.settings.launch_at_login = enabled; }
+    snapshot.clone()
+}
+
+fn refresh_running_providers(state: &Shared) -> bool {
+    let enabled = {
+        let snapshot = state.snapshot.lock().unwrap();
+        snapshot.settings.mini_enabled && snapshot.settings.mini_only_when_running
+    };
+    let observation = if enabled { presence::read_running() } else { Ok(vec![]) };
+    let mut snapshot = state.snapshot.lock().unwrap();
+    // A settings save may have disabled detection while the snapshot was taken.
+    if !(snapshot.settings.mini_enabled && snapshot.settings.mini_only_when_running) {
+        return presence::apply_observation(&mut snapshot.running_providers, Ok(vec![]));
+    }
+    if !enabled { return false; }
+    presence::apply_observation(&mut snapshot.running_providers, observation)
+}
 
 fn update_failure(app: &tauri::AppHandle, state: &Shared, message: &str) {
     {
@@ -254,10 +277,31 @@ async fn refresh_now(app: tauri::AppHandle, state: tauri::State<'_, Shared>) -> 
 #[tauri::command]
 async fn save_settings(app: tauri::AppHandle, state: tauri::State<'_, Shared>, settings: Settings) -> Result<(), String> {
     settings.validate()?;
-    std::fs::create_dir_all(&state.data_dir).map_err(|_| "설정 폴더 생성 실패")?;
-    std::fs::write(state.data_dir.join("settings.json"), serde_json::to_vec_pretty(&settings).map_err(|_| "설정 변환 실패")?).map_err(|_| "설정 저장 실패")?;
-    state.snapshot.lock().unwrap().settings = settings;
+    let refresh_connections;
+    {
+        let _guard = state.settings_gate.lock().unwrap();
+        let previous = startup::registration()?;
+        let current = previous.is_some();
+        let command = if settings.launch_at_login { Some(startup::current_command()?) } else { None };
+        let serialized = serde_json::to_vec_pretty(&settings).map_err(|_| "설정 변환 실패")?;
+        std::fs::create_dir_all(&state.data_dir).map_err(|_| "설정 폴더 생성 실패")?;
+        let temporary = state.data_dir.join("settings.pending.json");
+        std::fs::write(&temporary, serialized).map_err(|_| "설정 저장 실패")?;
+        let result = startup::save_with_autostart(current, settings.launch_at_login,
+            |enabled| {
+                if enabled == current { startup::write_registration(previous.as_deref()) }
+                else { startup::write_registration(command.as_deref()) }
+            },
+            || std::fs::rename(&temporary, state.data_dir.join("settings.json")).map_err(|_| "설정 저장 실패".into()));
+        if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+        result?;
+        let mut snapshot = state.snapshot.lock().unwrap();
+        refresh_connections = snapshot.settings.codex_enabled != settings.codex_enabled || snapshot.settings.claude_enabled != settings.claude_enabled;
+        snapshot.settings = settings;
+    }
+    refresh_running_providers(state.inner());
     publish(&app, state.inner());
+    if !refresh_connections { return Ok(()); }
     // Serialize behind any in-flight request before fetching the new configuration.
     { let _guard = state.gate.lock().await; }
     refresh(app, state.inner().clone(), true).await;
@@ -267,6 +311,7 @@ async fn save_settings(app: tauri::AppHandle, state: tauri::State<'_, Shared>, s
 pub(crate) fn mini_action(app: &tauri::AppHandle, action: &str, position: Option<(i32,i32)>) {
     if action == "show" { show_dashboard(app); return; }
     let state = app.state::<Shared>();
+    let _guard = state.settings_gate.lock().unwrap();
     let mut settings = state.snapshot.lock().unwrap().settings.clone();
     match action {
         "position" => if let Some((x,y)) = position { settings.mini_x=Some(x); settings.mini_y=Some(y); },
@@ -276,23 +321,29 @@ pub(crate) fn mini_action(app: &tauri::AppHandle, action: &str, position: Option
         "toggle" => { settings.mini_enabled=!settings.mini_enabled; if settings.mini_providers.is_empty() { settings.mini_providers.push("codex".into()); } },
         _ => return,
     }
+    if settings.validate().is_err() { return; }
     if std::fs::create_dir_all(&state.data_dir).is_ok() &&
         std::fs::write(state.data_dir.join("settings.json"),serde_json::to_vec_pretty(&settings).unwrap()).is_ok() {
         state.snapshot.lock().unwrap().settings=settings;
+        refresh_running_providers(state.inner());
         publish(app,state.inner());
     }
 }
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_dashboard(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--autostart") { show_dashboard(app); }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .invoke_handler(tauri::generate_handler![get_snapshot, refresh_now, save_settings, check_for_updates, open_release_page, install_update])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
-            let settings: Settings = std::fs::read(data_dir.join("settings.json")).ok()
+            let mut settings: Settings = std::fs::read(data_dir.join("settings.json")).ok()
                 .and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).filter(|s| s.validate().is_ok()).unwrap_or_default();
+            if let Ok(entry) = startup::registration() { settings.launch_at_login = entry.is_some(); }
+            let running_providers = if settings.mini_enabled && settings.mini_only_when_running { presence::read_running().unwrap_or_default() } else { vec![] };
             // Embed the bridge so moving the EXE never depends on a developer checkout.
             let bridge = data_dir.join("claude-statusline.ps1");
             let bridge_bytes = include_bytes!("../../scripts/claude-statusline.ps1");
@@ -309,8 +360,10 @@ pub fn run() {
                     claude_path: data_dir.join("claude-usage.json").to_string_lossy().into(),
                     bridge_command: format!("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" -OutputPath \"{}\"", bridge.display(), data_dir.join("claude-usage.json").display()),
                     updates: updates::UpdateState::default(),
+                    running_providers,
                 }), gate: tokio::sync::Mutex::new(()), data_dir, last_attempt: AtomicU64::new(0), failures: AtomicU64::new(0), mini: crate::minibar::MiniBar::new(app.handle().clone()),
                 update_gate: tokio::sync::Mutex::new(()), pending_update: Mutex::new(None), last_update_attempt: AtomicU64::new(0),
+                settings_gate: Mutex::new(()),
             });
             app.manage(state.clone());
             {
@@ -328,6 +381,16 @@ pub fn run() {
             let update_handle = handle.clone();
             let update_state = state.clone();
             tauri::async_runtime::spawn(async move { let _ = check_updates(update_handle, update_state, false).await; });
+            let presence_handle = handle.clone();
+            let presence_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    if refresh_running_providers(&presence_state) { publish(&presence_handle, &presence_state); }
+                }
+            });
             tauri::async_runtime::spawn(async move {
                 refresh(handle.clone(), state.clone(), true).await;
                 let mut last_claude = None;
@@ -367,7 +430,7 @@ mod tray_tests {
     use super::*;
     fn snapshot() -> Snapshot {
         Snapshot { providers: PROVIDERS.iter().map(|id|ProviderState::empty(id,"unavailable","")).collect(),
-            settings: Settings::default(), refreshing:false, claude_path:String::new(), bridge_command:String::new(), updates: updates::UpdateState::default() }
+            settings: Settings::default(), refreshing:false, claude_path:String::new(), bridge_command:String::new(), updates: updates::UpdateState::default(), running_providers: vec![] }
     }
     #[test] fn tooltip_only_includes_selected_services() {
         let text=tray_tooltip(&snapshot(),1);

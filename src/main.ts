@@ -24,14 +24,14 @@ let saving = false;
 let notice = '';
 let snapshot: Snapshot = {
   providers: Object.keys(serviceInfo).map(id => ({ id, status: 'unavailable', message: '데스크톱 앱에서 계정을 연결해 주세요.', windows: [], fetchedAt: null, source: '' })),
-  settings: { codexEnabled: true, claudeEnabled: false, refreshMinutes: 5, miniEnabled: true, miniProviders: ["codex"], miniLocked: true, miniX: null, miniY: null, updateCheckEnabled: true }, refreshing: false,
+  settings: { codexEnabled: true, claudeEnabled: false, refreshMinutes: 5, miniEnabled: true, miniOnlyWhenRunning: false, miniProviders: ["codex"], miniLocked: true, miniX: null, miniY: null, updateCheckEnabled: true, launchAtLogin: false }, refreshing: false, runningProviders: [],
   claudePath: '', bridgeCommand: '',
   updates: { currentVersion: '', availableVersion: null, releaseNotes: null, status: 'idle', checking: false, checkedAt: null, message: '', downloadedBytes: 0, totalBytes: null },
 };
 
 function preview(): Snapshot {
   const now = Math.floor(Date.now() / 1000);
-  return { ...snapshot, updates: { ...snapshot.updates, currentVersion: '0.2.0', availableVersion: '0.2.1', releaseNotes: '화면 예시입니다. 실제 배포된 버전이 아닙니다.\n\n- 업데이트 알림 예시\n- 변경 사항을 이곳에서 확인할 수 있습니다.', status: 'available', checkedAt: now, message: '예시 데이터입니다.' }, providers: [
+  return { ...snapshot, updates: { ...snapshot.updates, currentVersion: '0.3.0', availableVersion: '0.3.1', releaseNotes: '화면 예시입니다. 실제 배포된 버전이 아닙니다.\n\n- 업데이트 알림 예시\n- 변경 사항을 이곳에서 확인할 수 있습니다.', status: 'available', checkedAt: now, message: '예시 데이터입니다.' }, providers: [
     { id: 'claude', status: 'ready', message: '예시 데이터입니다.', fetchedAt: now, source: '예시', windows: [{ label: '5시간', usedPercent: 68, resetsAt: now + 8340 }, { label: '주간', usedPercent: 23, resetsAt: now + 235800 }] },
     { id: 'codex', status: 'ready', message: '예시 데이터입니다.', fetchedAt: now, source: '예시', windows: [{ label: 'Codex · 5시간', usedPercent: 26, resetsAt: now + 6600 }, { label: 'Codex · 주간', usedPercent: 81, resetsAt: now + 126000 }] },
     { id: 'antigravity', status: 'unsupported', message: '외부 한도 조회 경로를 검증 중입니다.', windows: [], fetchedAt: null, source: '' },
@@ -61,7 +61,7 @@ function readSettingsForm(): Settings | null {
   const element = document.querySelector<HTMLFormElement>('#settings-form');
   if (!element) return null;
   const form = new FormData(element);
-  return { ...snapshot.settings, codexEnabled: form.has('codex'), claudeEnabled: form.has('claude'), refreshMinutes: Number(form.get('interval')), miniEnabled: form.has('miniEnabled'), miniProviders: form.getAll('miniProvider').map(String), miniLocked: form.has('miniLocked'), updateCheckEnabled: form.has('updateCheckEnabled') };
+  return { ...snapshot.settings, codexEnabled: form.has('codex'), claudeEnabled: form.has('claude'), refreshMinutes: Number(form.get('interval')), miniEnabled: form.has('miniEnabled'), miniOnlyWhenRunning: form.has('miniOnlyWhenRunning'), miniProviders: form.getAll('miniProvider').map(String), miniLocked: form.has('miniLocked'), updateCheckEnabled: form.has('updateCheckEnabled'), launchAtLogin: form.has('launchAtLogin') };
 }
 
 function updateDialog(update: UpdateState): string {
@@ -105,8 +105,11 @@ function render() {
     <footer><span>◌ 한도 확인에는 AI 토큰을 사용하지 않아요.</span><span>${native ? data.updates.currentVersion ? `v${esc(data.updates.currentVersion)}` : '버전 확인 중…' : '브라우저 미리보기'}</span></footer></div>
     ${settingsOpen ? `<dialog id="settings-dialog" open aria-modal="true" aria-labelledby="settings-title"><div class="dialog-heading"><div><p class="eyebrow">CONNECTIONS</p><h2 id="settings-title">연결 설정</h2></div><button id="dismiss" class="icon-button" aria-label="설정 닫기">×</button></div><form id="settings-form"><label class="toggle-row"><span><b>Codex</b><small>설치된 Codex CLI의 로그인 계정으로 조회</small></span><input id="setting-codex" type="checkbox" name="codex" ${data.settings.codexEnabled ? 'checked' : ''}></label><label class="toggle-row"><span><b>Claude Code</b><small>상태줄에서 전달한 한도 데이터 읽기</small></span><input id="setting-claude" type="checkbox" name="claude" ${data.settings.claudeEnabled ? 'checked' : ''}></label><label class="interval-row">자동 조회 간격<select id="setting-interval" name="interval">${[5,10,15].map(m => `<option value="${m}" ${m === data.settings.refreshMinutes ? 'selected' : ''}>${m}분</option>`).join('')}</select></label>
     <label class="toggle-row"><span><b>새 버전 자동 확인</b><small>앱 시작 시와 6시간 간격으로 확인합니다.<br>설치는 직접 선택할 때만 진행합니다.</small></span><input id="setting-update-check" type="checkbox" name="updateCheckEnabled" ${data.settings.updateCheckEnabled ? 'checked' : ''}></label>
+    <label class="toggle-row"><span><b>Windows 로그인 시 자동 실행</b><small>대시보드 없이 트레이와 백그라운드로 시작합니다.<br>기본값은 꺼짐이며 Windows 시작 앱에서 차단한 경우 OS 설정이 우선합니다.</small></span><input id="setting-launch-at-login" type="checkbox" name="launchAtLogin" ${data.settings.launchAtLogin ? 'checked' : ''}></label>
     <fieldset class="mini-settings"><legend>작업표시줄 미니바</legend>
-    <label class="toggle-row"><span><b>미니바 상시 표시</b></span><input type="checkbox" name="miniEnabled" ${data.settings.miniEnabled ? 'checked' : ''}></label>
+    <label class="toggle-row"><span><b>미니바 표시</b></span><input type="checkbox" name="miniEnabled" ${data.settings.miniEnabled ? 'checked' : ''}></label>
+    <label class="toggle-row"><span><b>AI 도구 실행 중에만 표시</b><small>아래에서 선택한 도구 중 실행 중인 도구만 표시합니다.</small></span><input id="setting-mini-only-running" type="checkbox" name="miniOnlyWhenRunning" ${data.settings.miniOnlyWhenRunning ? 'checked' : ''}></label>
+    <p class="settings-hint">Windows용 Codex·Claude 실행 파일을 약 10초 간격으로 확인합니다. 앱이 열려 있는지를 기준으로 하며, 실제 요청 중인지는 확인하지 않습니다. 브라우저·WSL·일부 Node.js 실행 및 권한이 다른 앱은 감지하지 못할 수 있습니다. 자동 표시를 사용하려면 AI Token이 실행 중이어야 합니다.</p>
     <div class="mini-choices">${Object.entries(serviceInfo).map(([id,info]) => `<label><input type="checkbox" name="miniProvider" value="${id}" ${data.settings.miniProviders.includes(id) ? 'checked' : ''}><img src="/brands/${id}.png" alt="" width="20" height="20">${info.name}</label>`).join('')}</div>
     <label class="toggle-row"><span><b>위치 잠금</b><small>잠금을 풀고 미니바 왼쪽 손잡이를 끌어 이동</small></span><input type="checkbox" name="miniLocked" ${data.settings.miniLocked ? 'checked' : ''}></label>
     <p class="settings-hint">클릭: 상세 창 · 우클릭: 위치 잠금/초기화/숨기기. 단기·주간 잔여 한도를 별도로 표시합니다. 현재 미니바는 Windows에서 제공됩니다.</p></fieldset>

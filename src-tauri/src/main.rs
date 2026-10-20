@@ -5,5 +5,7 @@ mod providers;
 mod runtime;
 mod minibar;
 mod updates;
+mod presence;
+mod startup;
 
 fn main() { runtime::run(); }

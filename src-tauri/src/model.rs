@@ -118,17 +118,26 @@ mod tests {
     }
 }
 
-pub fn mini_lines(provider: Option<&ProviderState>, time: u64) -> Vec<(String, bool)> {
-    let Some(p) = provider else { return vec![("조회 대기".into(), false)]; };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MiniTone { Unknown, Normal, Low, Critical }
+
+pub fn mini_lines(provider: Option<&ProviderState>, time: u64) -> Vec<(String, MiniTone)> {
+    let Some(p) = provider else { return vec![("조회 대기".into(), MiniTone::Unknown)]; };
     let fresh = p.status == "ready" && p.fetched_at.is_some_and(|t| t <= time+60 && time.saturating_sub(t) <= 900);
     if p.windows.is_empty() {
-        return vec![("—".into(), false), (match p.status.as_str() { "disabled" => "연결 꺼짐", "unsupported" => "미연동", _ => "조회 대기" }.into(), false)];
+        return vec![("—".into(), MiniTone::Unknown), (match p.status.as_str() { "disabled" => "연결 꺼짐", "unsupported" => "미연동", _ => "조회 대기" }.into(), MiniTone::Unknown)];
     }
     p.windows.iter().take(2).map(|w| {
         let label = w.label.rsplit('·').next().unwrap_or(&w.label).trim();
         let label = if p.windows.len()>2 && w.label == p.windows[1].label { format!("{} 외", label) } else { label.into() };
         let value = if fresh { w.remaining(time) } else { None };
-        (format!("{} {}", label, value.map(|v| format!("{:.0}%", v)).unwrap_or_else(|| "—".into())), value.is_some_and(|v| v<=20.0))
+        let tone = match value {
+            Some(v) if v <= 10.0 => MiniTone::Critical,
+            Some(v) if v <= 20.0 => MiniTone::Low,
+            Some(_) => MiniTone::Normal,
+            None => MiniTone::Unknown,
+        };
+        (format!("{} {}", label, value.map(|v| format!("{:.0}%", v)).unwrap_or_else(|| "—".into())), tone)
     }).collect()
 }
 
@@ -149,9 +158,18 @@ mod mini_tests {
     #[test] fn mini_limits_stay_separate_and_stale_is_unknown() {
         let mut p = ProviderState::empty("codex","ready",""); p.fetched_at=Some(10);
         p.windows=vec![QuotaWindow { label:"Codex · 5시간".into(),used_percent:30.0,resets_at:Some(100) },QuotaWindow { label:"Codex · 주간".into(),used_percent:90.0,resets_at:Some(2000) }];
-        assert_eq!(mini_lines(Some(&p),20),vec![("5시간 70%".into(),false),("주간 10%".into(),true)]);
+        assert_eq!(mini_lines(Some(&p),20),vec![("5시간 70%".into(),MiniTone::Normal),("주간 10%".into(),MiniTone::Critical)]);
         assert_eq!(mini_lines(Some(&p),100)[0].0,"5시간 —");
+        assert_eq!(mini_lines(Some(&p),100)[0].1,MiniTone::Unknown);
         assert_eq!(mini_lines(Some(&p),1000)[1].0,"주간 —");
+        assert!(mini_lines(Some(&p),1000).iter().all(|line| line.1 == MiniTone::Unknown));
+        p.windows[0].resets_at=None;
+        for (remaining,tone) in [(100.0,MiniTone::Normal),(20.1,MiniTone::Normal),(20.0,MiniTone::Low),(10.1,MiniTone::Low),(10.0,MiniTone::Critical),(0.0,MiniTone::Critical)] {
+            p.windows[0].used_percent=100.0-remaining;
+            assert_eq!(mini_lines(Some(&p),20)[0].1,tone,"remaining {remaining}");
+        }
+        p.windows[0].used_percent=f64::NAN;
+        assert_eq!(mini_lines(Some(&p),20)[0].1,MiniTone::Unknown);
     }
     #[test] fn auto_visibility_filters_selected_services_and_respects_manual_off() {
         let mut snapshot = Snapshot { providers: vec![], settings: Settings::default(), refreshing: false, claude_path: String::new(), bridge_command: String::new(), updates: crate::updates::UpdateState::default(), running_providers: vec![] };

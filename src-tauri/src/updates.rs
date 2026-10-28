@@ -32,6 +32,13 @@ impl Default for UpdateState {
     }
 }
 
+impl UpdateState {
+    // Keep a retryable update visible even when a later check or download fails.
+    pub fn has_update(&self) -> bool {
+        self.available_version.as_ref().is_some_and(|version| version != &self.current_version)
+    }
+}
+
 pub fn newer_stable(current: &Version, remote: &Version) -> bool {
     remote.pre.is_empty() && remote.cmp_precedence(current) == Ordering::Greater
 }
@@ -72,6 +79,20 @@ pub fn release_page(version: Option<&str>) -> Result<String, ()> {
 mod tests {
     use super::*;
     fn version(value: &str) -> Version { Version::parse(value.trim_start_matches('v')).unwrap() }
+    #[test]
+    fn update_badge_survives_retryable_errors_and_hides_without_a_new_version() {
+        let mut state = UpdateState::default();
+        assert!(!state.has_update());
+        state.available_version = Some(state.current_version.clone());
+        assert!(!state.has_update());
+        state.available_version = Some("99.0.0".into());
+        for status in ["available", "checking", "downloading", "installing", "error"] {
+            state.status = status.into();
+            assert!(state.has_update(), "status {status}");
+        }
+        state.available_version = None;
+        assert!(!state.has_update());
+    }
     #[test]
     fn comparison_is_numeric_and_excludes_preview_versions() {
         assert!(newer_stable(&version("0.2.0"), &version("v0.10.0")));

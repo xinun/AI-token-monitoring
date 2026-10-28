@@ -2,7 +2,7 @@ use crate::{model::{now, ProviderState, Settings, Snapshot, PROVIDERS}, presence
 use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_opener::OpenerExt;
 use std::time::{Duration, Instant};
-use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}};
+use std::{path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, image::Image,
     menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}};
 
@@ -17,6 +17,7 @@ struct Inner {
     pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
     last_update_attempt: AtomicU64,
     settings_gate: Mutex<()>,
+    updates_requested: AtomicBool,
 }
 type Shared = Arc<Inner>;
 
@@ -44,6 +45,21 @@ pub(crate) fn show_dashboard(app: &tauri::AppHandle) {
         .title("AI Token").inner_size(780.0, 760.0).min_inner_size(620.0, 560.0).build() {
         let _ = window.set_focus();
     }
+}
+
+pub(crate) fn show_updates(app: &tauri::AppHandle) {
+    // Persist the intent before creating a WebView: its event listener may not
+    // exist yet. The frontend consumes this once after subscribing at startup.
+    app.state::<Shared>().updates_requested.store(true, Ordering::Release);
+    show_dashboard(app);
+    if let Some(window) = app.get_webview_window("dashboard") {
+        let _ = window.emit("open-updates", ());
+    }
+}
+
+#[tauri::command]
+fn take_update_request(state: tauri::State<'_, Shared>) -> bool {
+    state.updates_requested.swap(false, Ordering::AcqRel)
 }
 
 fn tray_tooltip(snapshot: &Snapshot, time: u64) -> String {
@@ -107,6 +123,14 @@ fn get_snapshot(state: tauri::State<'_, Shared>) -> Snapshot {
     let mut snapshot = state.snapshot.lock().unwrap();
     if let Some(enabled) = enabled { snapshot.settings.launch_at_login = enabled; }
     snapshot.clone()
+}
+
+#[tauri::command]
+async fn check_running_apps() -> Result<Vec<String>, String> {
+    // Explicit settings diagnostics only: do not persist or alter the polling state.
+    tauri::async_runtime::spawn_blocking(presence::read_running).await
+        .map_err(|_| "실행 중인 AI 도구 확인 작업을 완료하지 못했습니다.".to_string())?
+        .map_err(|_| "실행 중인 AI 도구를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string())
 }
 
 fn refresh_running_providers(state: &Shared) -> bool {
@@ -337,7 +361,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
-        .invoke_handler(tauri::generate_handler![get_snapshot, refresh_now, save_settings, check_for_updates, open_release_page, install_update])
+        .invoke_handler(tauri::generate_handler![get_snapshot, refresh_now, save_settings, check_for_updates, open_release_page, install_update, take_update_request, check_running_apps])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let mut settings: Settings = std::fs::read(data_dir.join("settings.json")).ok()
@@ -363,7 +387,7 @@ pub fn run() {
                     running_providers,
                 }), gate: tokio::sync::Mutex::new(()), data_dir, last_attempt: AtomicU64::new(0), failures: AtomicU64::new(0), mini: crate::minibar::MiniBar::new(app.handle().clone()),
                 update_gate: tokio::sync::Mutex::new(()), pending_update: Mutex::new(None), last_update_attempt: AtomicU64::new(0),
-                settings_gate: Mutex::new(()),
+                settings_gate: Mutex::new(()), updates_requested: AtomicBool::new(false),
             });
             app.manage(state.clone());
             {

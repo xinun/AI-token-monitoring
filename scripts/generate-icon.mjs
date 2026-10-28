@@ -1,26 +1,59 @@
-import { deflateSync } from 'node:zlib';
-import { writeFileSync } from 'node:fs';
-const size = 256;
-const pixels = Buffer.alloc((size * 4 + 1) * size);
-for (let y = 0; y < size; y++) {
-  for (let x = 0; x < size; x++) {
-    const at = y * (size * 4 + 1) + 1 + x * 4;
-    const dx = x - 127.5, dy = y - 127.5;
-    const inside = dx * dx + dy * dy < 115 ** 2;
-    const inner = dx * dx + dy * dy < 73 ** 2;
-    const fill = inside ? inner && dx < 0 ? [227, 239, 203, 255] : [59, 82, 47, 255] : [0, 0, 0, 0];
-    pixels.set(fill, at);
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const projectRoot = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
+const source = join(projectRoot, 'public', 'app-icon.svg');
+const cli = join(projectRoot, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
+const icons = join(projectRoot, 'src-tauri', 'icons');
+const tools = join(projectRoot, '.tools');
+const keep = ['32x32.png', '128x128.png', '128x128@2x.png', 'icon.png', 'icon.ico', 'icon.icns'];
+
+function insideProject(path) {
+  const part = relative(projectRoot, path);
+  return part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part);
+}
+
+if (!existsSync(source) || !existsSync(cli)) {
+  throw new Error('App icon SVG or local Tauri CLI is missing. Run npm ci before generating icons.');
+}
+mkdirSync(tools, { recursive: true });
+if (lstatSync(tools).isSymbolicLink() || realpathSync(tools) !== tools || !insideProject(tools)) {
+  throw new Error('Refusing to generate icons inside a linked or external tools directory.');
+}
+const temporary = realpathSync(mkdtempSync(join(tools, 'icons-')));
+
+try {
+  const result = spawnSync(process.execPath, [cli, 'icon', source, '--output', temporary], {
+    cwd: projectRoot,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Tauri icon generation failed (${result.status ?? result.signal}).`);
+
+  // Some CLI versions omit this conventional alias. Reuse the generated 256px PNG.
+  if (!existsSync(join(temporary, 'icon.png'))) {
+    copyFileSync(join(temporary, '128x128@2x.png'), join(temporary, 'icon.png'));
   }
+  for (const name of keep) {
+    const input = join(temporary, name);
+    if (!lstatSync(input).isFile() || lstatSync(input).isSymbolicLink()) {
+      throw new Error(`Expected generated icon is missing or linked: ${name}`);
+    }
+  }
+  mkdirSync(icons, { recursive: true });
+  if (lstatSync(icons).isSymbolicLink() || realpathSync(icons) !== icons || !insideProject(icons)) {
+    throw new Error('Refusing to replace icons inside a linked or external directory.');
+  }
+  for (const name of keep) copyFileSync(join(temporary, name), join(icons, name));
+  console.log(`Generated ${keep.length} desktop icons from public/app-icon.svg.`);
+} finally {
+  // Only remove this invocation's absolute, direct child of the checked .tools path.
+  if (!isAbsolute(temporary) || dirname(temporary) !== tools || !insideProject(temporary)
+      || lstatSync(temporary).isSymbolicLink() || realpathSync(temporary) !== temporary) {
+    throw new Error('Refusing to remove an unexpected icon generation directory.');
+  }
+  rmSync(temporary, { recursive: true, force: true });
 }
-function crc32(data) {
-  let crc = 0xffffffff;
-  for (const byte of data) { crc ^= byte; for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0); }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-function chunk(type, data) {
-  const tag = Buffer.from(type), out = Buffer.alloc(data.length + 12);
-  out.writeUInt32BE(data.length); tag.copy(out, 4); data.copy(out, 8); out.writeUInt32BE(crc32(Buffer.concat([tag, data])), data.length + 8);
-  return out;
-}
-const header = Buffer.alloc(13); header.writeUInt32BE(size); header.writeUInt32BE(size, 4); header[8] = 8; header[9] = 6;
-writeFileSync('app-icon.png', Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]));

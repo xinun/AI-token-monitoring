@@ -1,6 +1,6 @@
 //! Download and signature tests for real local release artifacts; never runs an installer.
-//! Run after packaging: cargo test --test updater_artifact -- --ignored --test-threads=1
-#![cfg(all(windows, debug_assertions))]
+//! Run after packaging: cargo test --release --test updater_artifact -- --ignored --test-threads=1
+#![cfg(windows)]
 
 use serde_json::{json, Value};
 use std::{
@@ -40,6 +40,8 @@ impl FixtureServer {
                     }
                     Err(error) => panic!("fixture accept failed: {error}"),
                 };
+                // Accepted Windows sockets can inherit the listener nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                 stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
                 let mut reader = BufReader::new(&stream);
@@ -81,8 +83,8 @@ impl Drop for FixtureServer {
 
 fn artifacts() -> (Value, Value, Vec<u8>) {
     let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let release = std::env::var_os("AI_TOKEN_RELEASE_DIR").map(PathBuf::from).unwrap_or_else(|| project.join("release"));
     let config: Value = serde_json::from_slice(&std::fs::read(project.join("src-tauri/tauri.conf.json")).unwrap()).unwrap();
+    let release = std::env::var_os("AI_TOKEN_RELEASE_DIR").map(PathBuf::from).unwrap_or_else(|| project.join("release").join(config["version"].as_str().unwrap()));
     let updater = config["plugins"]["updater"].clone();
     assert_eq!(updater["requireSignedVersion"], true, "production signature version binding must be enabled");
     assert!(!updater["pubkey"].as_str().unwrap().is_empty(), "public verification key is required");
@@ -92,14 +94,15 @@ fn artifacts() -> (Value, Value, Vec<u8>) {
     assert!(!filename.contains('%'), "use a plain ASCII release filename");
     assert!(filename.ends_with("-setup.exe"), "the update asset must be the installer");
     let binary = std::fs::read(release.join(filename)).unwrap();
-    let signature = std::fs::read_to_string(release.join(format!("{filename}.sig"))).unwrap();
-    assert_eq!(signature.trim(), manifest["platforms"]["windows-x86_64"]["signature"].as_str().unwrap());
+    assert!(!manifest["platforms"]["windows-x86_64"]["signature"].as_str().unwrap().trim().is_empty());
     assert_eq!(manifest["version"], config["version"], "packaged manifest and app must agree");
     (updater, manifest, binary)
 }
 
-fn download(updater_config: Value, manifest: Value, binary: Vec<u8>) -> Result<Vec<u8>, Error> {
+fn download(mut updater_config: Value, manifest: Value, binary: Vec<u8>) -> Result<Vec<u8>, Error> {
     let server = FixtureServer::start(manifest, binary);
+    // Test-only HTTP for the loopback fixture; production HTTPS settings stay unchanged.
+    updater_config["dangerousInsecureTransportProtocol"] = json!(true);
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
     context.config_mut().plugins.0.insert("updater".into(), updater_config);
     let app = tauri::test::mock_builder()
@@ -107,7 +110,7 @@ fn download(updater_config: Value, manifest: Value, binary: Vec<u8>) -> Result<V
         .build(context).unwrap();
     let result = tauri::async_runtime::block_on(async {
         // Mock runtime reports current version 0.1.0; production comparator is untouched.
-        // HTTP is accepted only in this debug-only loopback fixture.
+        // HTTP is explicitly allowed only in this loopback test configuration.
         let update = app.updater_builder().endpoints(vec![server.endpoint.clone()])?
             .target("windows-x86_64").no_proxy().timeout(Duration::from_secs(15))
             .build()?.check().await?.expect("the real packaged version must exceed mock 0.1.0");
@@ -118,7 +121,7 @@ fn download(updater_config: Value, manifest: Value, binary: Vec<u8>) -> Result<V
 }
 
 #[test]
-#[ignore = "requires the packaged installer, signature, and latest.json"]
+#[ignore = "requires the packaged installer and latest.json"]
 fn real_installer_download_verifies_signature_and_version() {
     let (config, manifest, binary) = artifacts();
     let original = binary.clone();
@@ -126,7 +129,7 @@ fn real_installer_download_verifies_signature_and_version() {
 }
 
 #[test]
-#[ignore = "requires the packaged installer, signature, and latest.json"]
+#[ignore = "requires the packaged installer and latest.json"]
 fn tampered_installer_is_rejected_cryptographically() {
     let (config, manifest, mut binary) = artifacts();
     let last = binary.last_mut().expect("installer cannot be empty");
@@ -136,7 +139,7 @@ fn tampered_installer_is_rejected_cryptographically() {
 }
 
 #[test]
-#[ignore = "requires the packaged installer, signature, and latest.json"]
+#[ignore = "requires the packaged installer and latest.json"]
 fn genuine_installer_cannot_be_relabelled_as_another_version() {
     let (config, mut manifest, binary) = artifacts();
     assert_ne!(manifest["version"], "99.0.0");

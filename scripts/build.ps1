@@ -22,6 +22,8 @@ $cargoDirectory = Join-Path $env:USERPROFILE '.cargo/bin'
 Push-Location $projectRoot
 try {
     if (Test-Path -LiteralPath $cargoDirectory) { $env:PATH = $cargoDirectory + ';' + $env:PATH }
+    & npm.cmd run icons
+    if ($LASTEXITCODE -ne 0) { throw 'App icon generation failed.' }
     # Pass the path, never the key contents, to the build process.
     $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
     & npm.cmd run tauri -- build --bundles nsis --ci

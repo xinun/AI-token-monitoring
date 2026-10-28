@@ -1,5 +1,5 @@
-[CmdletBinding(SupportsShouldProcess = $true)]
-param()
+﻿[CmdletBinding(SupportsShouldProcess = $true)]
+param([switch]$DebugOnly)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -8,7 +8,8 @@ if (($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
     throw 'Refusing to clean a linked project directory.'
 }
 $rootPrefix = $projectRoot.TrimEnd('\') + '\'
-$targetPrefix = [System.IO.Path]::GetFullPath((Join-Path $projectRoot 'src-tauri/target')).TrimEnd('\') + '\'
+$cacheRelativePath = if ($DebugOnly) { 'src-tauri/target/debug' } else { 'src-tauri/target' }
+$targetPrefix = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $cacheRelativePath)).TrimEnd('\') + '\'
 $runningFromTarget = @(Get-Process -Name 'ai-token' -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -and $_.Path.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)
 })
@@ -17,7 +18,8 @@ if ($runningFromTarget.Count -gt 0) {
 }
 
 $targets = @()
-foreach ($relativePath in @('.tools', 'dist', 'src-tauri/target', 'src-tauri/gen/schemas')) {
+$relativePaths = if ($DebugOnly) { @('src-tauri/target/debug') } else { @('.tools', 'dist', 'src-tauri/target', 'src-tauri/gen/schemas') }
+foreach ($relativePath in $relativePaths) {
     $targetPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $relativePath))
     if (-not $targetPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw ('Cleanup path outside project: ' + $targetPath)

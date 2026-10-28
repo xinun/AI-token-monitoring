@@ -3,11 +3,13 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { escapeHtml as esc, isFresh, remaining, resetLabel } from './presentation.ts';
+import { patchProviderCards, stopViewAnimations } from './quota-view.ts';
 import { downloadProgress, hasUpdate, releaseNotesHtml, updateBusy, updateStatusText, updateViewKey } from './update-presentation.ts';
 import type { ProviderState, Settings, Snapshot, UpdateState } from './types.ts';
 
 const native = isTauri();
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const serviceInfo: Record<string, { name: string; subtitle: string; mark: string }> = {
   claude: { name: 'Claude', subtitle: 'Claude Code 구독', mark: '✳' },
   codex: { name: 'Codex', subtitle: 'OpenAI 구독', mark: '◎' },
@@ -21,6 +23,11 @@ let updateNotice = '';
 let settingsDraft: Settings | null = null;
 let demo = false;
 let saving = false;
+let pendingUpdatesOpen = false;
+let detectionChecking = false;
+let detectionResult: string[] | null = null;
+let detectionError = '';
+let detectionGeneration = 0;
 let notice = '';
 let snapshot: Snapshot = {
   providers: Object.keys(serviceInfo).map(id => ({ id, status: 'unavailable', message: '데스크톱 앱에서 계정을 연결해 주세요.', windows: [], fetchedAt: null, source: '' })),
@@ -31,7 +38,7 @@ let snapshot: Snapshot = {
 
 function preview(): Snapshot {
   const now = Math.floor(Date.now() / 1000);
-  return { ...snapshot, updates: { ...snapshot.updates, currentVersion: '0.3.0', availableVersion: '0.3.1', releaseNotes: '화면 예시입니다. 실제 배포된 버전이 아닙니다.\n\n- 업데이트 알림 예시\n- 변경 사항을 이곳에서 확인할 수 있습니다.', status: 'available', checkedAt: now, message: '예시 데이터입니다.' }, providers: [
+  return { ...snapshot, updates: { ...snapshot.updates, currentVersion: '0.3.4', availableVersion: '0.3.5', releaseNotes: '화면 예시입니다. 실제 배포된 버전이 아닙니다.\n\n- 업데이트 알림 예시\n- 변경 사항을 이곳에서 확인할 수 있습니다.', status: 'available', checkedAt: now, message: '예시 데이터입니다.' }, providers: [
     { id: 'claude', status: 'ready', message: '예시 데이터입니다.', fetchedAt: now, source: '예시', windows: [{ label: '5시간', usedPercent: 68, resetsAt: now + 8340 }, { label: '주간', usedPercent: 23, resetsAt: now + 235800 }] },
     { id: 'codex', status: 'ready', message: '예시 데이터입니다.', fetchedAt: now, source: '예시', windows: [{ label: 'Codex · 5시간', usedPercent: 26, resetsAt: now + 6600 }, { label: 'Codex · 주간', usedPercent: 81, resetsAt: now + 126000 }] },
     { id: 'antigravity', status: 'unsupported', message: '외부 한도 조회 경로를 검증 중입니다.', windows: [], fetchedAt: null, source: '' },
@@ -45,23 +52,100 @@ function card(provider: ProviderState, now: number): string {
   const fresh = isFresh(provider, now);
   const known = fresh ? provider.windows.map(w => remaining(w, now)).filter((p): p is number => p !== null) : [];
   const status = known.length ? '연결됨' : provider.status === 'unsupported' ? '지원 준비 중' : provider.status === 'disabled' ? '연결 꺼짐' : '확인 필요';
-  const bars = provider.windows.map(w => {
+  const bars = provider.windows.map((w, index) => {
     const value = remaining(w, now);
     const usable = fresh && value !== null;
-    return `<div class="quota ${usable ? '' : 'stale'}"><div class="quota-line"><span>${esc(w.label)}</span><span class="quota-value">${usable ? `<b>${Math.round(value)}<small>%</small></b> <span>잔여</span>` : '<b>—</b> <span>최신 값 없음</span>'}</span></div>
-      <div class="bar" role="${usable ? 'progressbar' : 'presentation'}" ${usable ? `aria-label="${esc(info.name + ' ' + w.label)} 잔여 한도" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"` : ''}><i class="${usable && value <= 20 ? 'low' : ''}" style="width:${usable ? value : 0}%"></i></div>
+    const tone = !usable ? 'unknown' : value <= 10 ? 'critical' : value <= 20 ? 'low' : 'normal';
+    const label = tone === 'critical' ? '부족' : tone === 'low' ? '주의' : '잔여';
+    const key = esc(`${provider.id}:${index}:${w.label}`);
+    return `<div class="quota ${usable ? '' : 'stale'}" data-quota-key="${key}" data-tone="${tone}"><div class="quota-line"><span>${esc(w.label)}</span><span class="quota-value" title="잔여 한도">${usable ? `<b>${Math.round(value)}<small>%</small></b> <span>${label}</span>` : '<b>—</b> <span>최신 값 없음</span>'}</span></div>
+      <div class="bar" role="${usable ? 'progressbar' : 'presentation'}" ${usable ? `aria-label="${esc(info.name + ' ' + w.label)} 잔여 한도" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}" aria-valuetext="${Math.round(value)}% 잔여${tone === 'normal' ? '' : ' · ' + label}"` : ''}><i data-gauge-key="${key}" data-remaining="${usable ? value : ''}" style="transform:scaleX(${usable ? value / 100 : 0})"></i></div>
       <div class="reset">${esc(resetLabel(w.resetsAt, now))}${!usable && value !== null ? ` · 마지막 기록 잔여 ${Math.round(value)}%` : ''}</div></div>`;
   }).join('');
-  return `<article class="provider ${provider.id}"><div class="provider-heading"><span class="service-mark" aria-hidden="true"><img src="/brands/${provider.id}.png" alt="" width="28" height="28"></span><div><h2>${info.name}</h2><p>${info.subtitle}</p></div><span class="status ${known.length ? 'connected' : ''}"><i></i>${status}</span></div>
+  return `<article class="provider ${provider.id}" data-provider="${esc(provider.id)}"><div class="provider-heading"><span class="service-mark" aria-hidden="true"><img src="/brands/${provider.id}.png" alt="" width="28" height="28"></span><div><h2>${info.name}</h2><p>${info.subtitle}</p></div><span class="status ${known.length ? 'connected' : ''}"><i></i>${status}</span></div>
     ${bars || `<div class="empty-quota"><span class="empty-value">—<small>잔여 한도</small></span><p>${esc(provider.message)}</p>${provider.id === 'claude' || provider.id === 'codex' ? '<button class="text-button connect" type="button">연결 설정 <span aria-hidden="true">↗</span></button>' : '<span class="pending-note">확인되지 않은 값은 표시하지 않아요</span>'}</div>`}
     ${bars ? `<div class="provider-foot">${esc(provider.source)}<span>${provider.fetchedAt !== null ? new Date(provider.fetchedAt * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) + ' 갱신' : ''}</span></div><p class="source-note">${esc(provider.message)}</p>` : ''}</article>`;
+}
+
+function updateDashboard(animate = true) {
+  if (settingsOpen || updatesOpen) return;
+  const container = app.querySelector<HTMLElement>('.providers');
+  if (!container) { render(); return; }
+  const data = demo ? preview() : snapshot;
+  const now = Math.floor(Date.now() / 1000);
+  patchProviderCards(container, data.providers.map(provider => card(provider, now)).join(''),
+    animate && !document.hidden && !reducedMotion.matches);
+  const connected = data.providers.filter(provider => isFresh(provider, now) && provider.windows.some(window => remaining(window, now) !== null)).length;
+  const summary = app.querySelector('#connected-summary');
+  if (summary) summary.textContent = `${connected}개 서비스 ${demo ? '예시 연결' : '최신 한도 확인'}`;
+  const interval = app.querySelector('#refresh-interval');
+  if (interval) interval.textContent = `${data.settings.refreshMinutes}분 간격으로 갱신`;
+  const version = app.querySelector('#current-version');
+  if (version) version.textContent = native ? data.updates.currentVersion ? `v${data.updates.currentVersion}` : '버전 확인 중…' : '브라우저 미리보기';
+  const refresh = app.querySelector<HTMLButtonElement>('#refresh');
+  if (refresh) {
+    refresh.disabled = snapshot.refreshing || !native;
+    const label = snapshot.refreshing ? '확인 중…' : '새로고침';
+    if (refresh.querySelector('.refresh-label')?.textContent !== label) refresh.querySelector('.refresh-label')!.textContent = label;
+  }
+  const feedback = app.querySelector('.dashboard-content > .notice');
+  if (feedback) feedback.textContent = notice;
+  const bell = app.querySelector<HTMLButtonElement>('#updates');
+  if (bell) {
+    const available = hasUpdate(data.updates);
+    bell.setAttribute('aria-label', available ? '새 버전 있음 · 앱 업데이트' : '앱 업데이트');
+    if (available && !bell.querySelector('.update-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'update-badge'; badge.setAttribute('aria-hidden', 'true'); bell.append(badge);
+    } else if (!available) bell.querySelector('.update-badge')?.remove();
+  }
 }
 
 function readSettingsForm(): Settings | null {
   const element = document.querySelector<HTMLFormElement>('#settings-form');
   if (!element) return null;
   const form = new FormData(element);
-  return { ...snapshot.settings, codexEnabled: form.has('codex'), claudeEnabled: form.has('claude'), refreshMinutes: Number(form.get('interval')), miniEnabled: form.has('miniEnabled'), miniOnlyWhenRunning: form.has('miniOnlyWhenRunning'), miniProviders: form.getAll('miniProvider').map(String), miniLocked: form.has('miniLocked'), updateCheckEnabled: form.has('updateCheckEnabled'), launchAtLogin: form.has('launchAtLogin') };
+  const mode = form.get('miniDisplayMode');
+  return { ...snapshot.settings, codexEnabled: form.has('codex'), claudeEnabled: form.has('claude'), refreshMinutes: Number(form.get('interval')), miniEnabled: mode === 'always' || mode === 'running', miniOnlyWhenRunning: mode === 'running', miniProviders: form.getAll('miniProvider').map(String), miniLocked: form.has('miniLocked'), updateCheckEnabled: form.has('updateCheckEnabled'), launchAtLogin: form.has('launchAtLogin') };
+}
+
+function detectionText(): string {
+  if (!native) return '데스크톱 앱에서 실행 중인 AI를 확인할 수 있습니다.';
+  if (detectionChecking) return '실행 중인 AI 앱을 확인하고 있습니다…';
+  if (detectionError) return detectionError;
+  const selected = readSettingsForm()?.miniProviders ?? snapshot.settings.miniProviders;
+  const detected = detectionResult ?? snapshot.runningProviders;
+  const names = detected.filter(id => id === 'codex' || id === 'claude').map(id => serviceInfo[id].name);
+  if (detectionResult !== null) {
+    if (!names.length) return '검사 결과: Codex·Claude 실행이 감지되지 않았습니다.';
+    return `검사 결과: ${names.join(', ')} 실행 중${detected.some(id => selected.includes(id)) ? '' : ' · 아래 표시 항목에서도 선택해 주세요.'}`;
+  }
+  if (snapshot.settings.miniEnabled && snapshot.settings.miniOnlyWhenRunning) {
+    return names.length ? `최근 감지: ${names.join(', ')}` : 'AI 앱 실행을 기다리고 있습니다.';
+  }
+  return '감지 확인으로 현재 실행 중인 AI 앱을 검사할 수 있습니다.';
+}
+
+function updateDetectionStatus() {
+  const status = document.querySelector('#detection-status');
+  const text = detectionText();
+  if (status && status.textContent !== text) status.textContent = text;
+  const button = document.querySelector<HTMLButtonElement>('#check-running-apps');
+  if (button) { button.disabled = !native || detectionChecking || saving; button.textContent = detectionChecking ? '확인 중…' : '감지 확인'; }
+}
+
+async function checkRunningApps() {
+  if (!native || detectionChecking || saving) return;
+  const generation = detectionGeneration;
+  detectionChecking = true; detectionError = ''; updateDetectionStatus();
+  try {
+    const detected = await invoke<string[]>('check_running_apps');
+    if (generation === detectionGeneration && settingsOpen) detectionResult = detected;
+  } catch (error) {
+    if (generation === detectionGeneration && settingsOpen) detectionError = typeof error === 'string' ? error : '앱 실행 상태를 확인하지 못했습니다. 다시 시도해 주세요.';
+  } finally {
+    if (generation === detectionGeneration) { detectionChecking = false; updateDetectionStatus(); }
+  }
 }
 
 function updateDialog(update: UpdateState): string {
@@ -83,6 +167,7 @@ function updateDialog(update: UpdateState): string {
 }
 
 function render() {
+  stopViewAnimations(app);
   if (settingsOpen) settingsDraft = readSettingsForm() || settingsDraft;
   const active = document.activeElement instanceof HTMLElement && app.contains(document.activeElement) ? document.activeElement : null;
   const focusId = active?.id;
@@ -96,20 +181,21 @@ function render() {
   if (settingsOpen && settingsDraft) data.settings = settingsDraft;
   const now = Math.floor(Date.now() / 1000);
   const connected = data.providers.filter(p => isFresh(p, now) && p.windows.some(w => remaining(w, now) !== null)).length;
-  app.innerHTML = `<main><div class="dashboard-content" ${settingsOpen || updatesOpen ? 'inert' : ''}><header><div class="brand"><span class="app-mark" aria-hidden="true">◒</span><span>AI Token<small>QUOTA MONITOR</small></span></div><div class="header-actions"><button id="updates" class="icon-button update-bell" aria-label="${hasUpdate(data.updates) ? '새 버전 있음 · 앱 업데이트' : '앱 업데이트'}" aria-expanded="${updatesOpen}" aria-haspopup="dialog" title="앱 업데이트"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/></svg>${hasUpdate(data.updates) ? '<span class="update-badge" aria-hidden="true"></span>' : ''}</button><button id="settings" class="icon-button" aria-label="연결 설정" aria-expanded="${settingsOpen}" aria-haspopup="dialog" title="연결 설정">⚙</button>${native ? '<button id="close" class="icon-button" aria-label="창 닫기, 트레이에서 계속 실행" title="트레이로 돌아가기">×</button>' : ''}</div></header>
-    <section class="intro"><div><p class="eyebrow">YOUR AI, AT A GLANCE</p><h1>남은 한도, 한눈에.</h1><p class="intro-copy">다음 작업 전에, AI의 여유를 확인하세요.</p></div><button id="refresh" class="refresh-button" ${snapshot.refreshing || !native ? 'disabled' : ''}><span aria-hidden="true">↻</span>${snapshot.refreshing ? '확인 중…' : '새로고침'}</button></section>
+  app.innerHTML = `<main><div class="dashboard-content" ${settingsOpen || updatesOpen ? 'inert' : ''}><header><div class="brand"><span class="app-mark" aria-hidden="true"><img src="/app-icon.svg" alt="" width="35" height="35"></span><span>AI Token<small>QUOTA MONITOR</small></span></div><div class="header-actions"><button id="updates" class="icon-button update-bell" aria-label="${hasUpdate(data.updates) ? '새 버전 있음 · 앱 업데이트' : '앱 업데이트'}" aria-expanded="${updatesOpen}" aria-haspopup="dialog" title="앱 업데이트"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/></svg>${hasUpdate(data.updates) ? '<span class="update-badge" aria-hidden="true"></span>' : ''}</button><button id="settings" class="icon-button" aria-label="연결 설정" aria-expanded="${settingsOpen}" aria-haspopup="dialog" title="연결 설정">⚙</button>${native ? '<button id="close" class="icon-button" aria-label="창 닫기, 트레이에서 계속 실행" title="트레이로 돌아가기">×</button>' : ''}</div></header>
+    <section class="intro"><div><p class="eyebrow">YOUR AI, AT A GLANCE</p><h1>남은 한도, 한눈에.</h1><p class="intro-copy">다음 작업 전에, AI의 여유를 확인하세요.</p></div><button id="refresh" class="refresh-button" ${snapshot.refreshing || !native ? 'disabled' : ''}><span aria-hidden="true">↻</span><span class="refresh-label">${snapshot.refreshing ? '확인 중…' : '새로고침'}</span></button></section>
     ${!native ? `<div class="preview-banner"><span>${demo ? '화면 미리보기 · 실제 계정 사용량이 아닙니다.' : '브라우저 미리보기 · 계정 조회는 데스크톱 앱에서 실행됩니다.'}</span><button id="demo">${demo ? '예시 끄기' : '예시 보기'}</button></div>` : ''}
-    <div class="overview"><span><i class="live-dot"></i>${connected}개 서비스 ${demo ? '예시 연결' : '최신 한도 확인'}</span><span>${data.settings.refreshMinutes}분 간격으로 갱신</span></div>
+    <div class="overview"><span><i class="live-dot"></i><span id="connected-summary">${connected}개 서비스 ${demo ? '예시 연결' : '최신 한도 확인'}</span></span><span id="refresh-interval">${data.settings.refreshMinutes}분 간격으로 갱신</span></div>
     <section class="providers" aria-label="서비스별 남은 한도">${data.providers.map(p => card(p, now)).join('')}</section>
     <div class="notice" role="status" aria-live="polite">${esc(notice)}</div>
-    <footer><span>◌ 한도 확인에는 AI 토큰을 사용하지 않아요.</span><span>${native ? data.updates.currentVersion ? `v${esc(data.updates.currentVersion)}` : '버전 확인 중…' : '브라우저 미리보기'}</span></footer></div>
+    <footer><span>◌ 한도 확인에는 AI 토큰을 사용하지 않아요.</span><span id="current-version">${native ? data.updates.currentVersion ? `v${esc(data.updates.currentVersion)}` : '버전 확인 중…' : '브라우저 미리보기'}</span></footer></div>
     ${settingsOpen ? `<dialog id="settings-dialog" open aria-modal="true" aria-labelledby="settings-title"><div class="dialog-heading"><div><p class="eyebrow">CONNECTIONS</p><h2 id="settings-title">연결 설정</h2></div><button id="dismiss" class="icon-button" aria-label="설정 닫기">×</button></div><form id="settings-form"><label class="toggle-row"><span><b>Codex</b><small>설치된 Codex CLI의 로그인 계정으로 조회</small></span><input id="setting-codex" type="checkbox" name="codex" ${data.settings.codexEnabled ? 'checked' : ''}></label><label class="toggle-row"><span><b>Claude Code</b><small>상태줄에서 전달한 한도 데이터 읽기</small></span><input id="setting-claude" type="checkbox" name="claude" ${data.settings.claudeEnabled ? 'checked' : ''}></label><label class="interval-row">자동 조회 간격<select id="setting-interval" name="interval">${[5,10,15].map(m => `<option value="${m}" ${m === data.settings.refreshMinutes ? 'selected' : ''}>${m}분</option>`).join('')}</select></label>
     <label class="toggle-row"><span><b>새 버전 자동 확인</b><small>앱 시작 시와 6시간 간격으로 확인합니다.<br>설치는 직접 선택할 때만 진행합니다.</small></span><input id="setting-update-check" type="checkbox" name="updateCheckEnabled" ${data.settings.updateCheckEnabled ? 'checked' : ''}></label>
     <label class="toggle-row"><span><b>Windows 로그인 시 자동 실행</b><small>대시보드 없이 트레이와 백그라운드로 시작합니다.<br>기본값은 꺼짐이며 Windows 시작 앱에서 차단한 경우 OS 설정이 우선합니다.</small></span><input id="setting-launch-at-login" type="checkbox" name="launchAtLogin" ${data.settings.launchAtLogin ? 'checked' : ''}></label>
     <fieldset class="mini-settings"><legend>작업표시줄 미니바</legend>
-    <label class="toggle-row"><span><b>미니바 표시</b></span><input type="checkbox" name="miniEnabled" ${data.settings.miniEnabled ? 'checked' : ''}></label>
-    <label class="toggle-row"><span><b>AI 도구 실행 중에만 표시</b><small>아래에서 선택한 도구 중 실행 중인 도구만 표시합니다.</small></span><input id="setting-mini-only-running" type="checkbox" name="miniOnlyWhenRunning" ${data.settings.miniOnlyWhenRunning ? 'checked' : ''}></label>
-    <p class="settings-hint">Windows용 Codex·Claude 실행 파일을 약 10초 간격으로 확인합니다. 앱이 열려 있는지를 기준으로 하며, 실제 요청 중인지는 확인하지 않습니다. 브라우저·WSL·일부 Node.js 실행 및 권한이 다른 앱은 감지하지 못할 수 있습니다. 자동 표시를 사용하려면 AI Token이 실행 중이어야 합니다.</p>
+    <label class="interval-row"><span>미니바 표시 방식</span><select id="setting-mini-mode" name="miniDisplayMode"><option value="always" ${data.settings.miniEnabled && !data.settings.miniOnlyWhenRunning ? 'selected' : ''}>항상 표시</option><option value="running" ${data.settings.miniEnabled && data.settings.miniOnlyWhenRunning ? 'selected' : ''}>AI 앱 실행 시 자동 표시</option><option value="hidden" ${!data.settings.miniEnabled ? 'selected' : ''}>숨김</option></select></label>
+    <p class="settings-hint">자동 표시를 선택하고 저장하면 아래에서 선택한 Codex·Claude가 실행 중일 때 작은 미니바만 나타납니다. AI Token은 백그라운드에서 실행 중이어야 하며, Windows 로그인 시 자동 실행도 함께 설정할 수 있습니다.</p>
+    <div class="detection-row"><span id="detection-status" role="status" aria-live="polite">${esc(detectionText())}</span><button id="check-running-apps" type="button" class="secondary-button" ${!native || detectionChecking || saving ? 'disabled' : ''}>${detectionChecking ? '확인 중…' : '감지 확인'}</button></div>
+    <p class="settings-hint">실행 여부를 약 10초 간격으로 확인하며 실제 토큰 사용 순간을 감지하지는 않습니다. 브라우저·WSL·일부 Node.js 실행 방식은 지원하지 않습니다. ‘감지 확인’은 계정 조회 없이 앱 실행 여부만 검사합니다.</p>
     <div class="mini-choices">${Object.entries(serviceInfo).map(([id,info]) => `<label><input type="checkbox" name="miniProvider" value="${id}" ${data.settings.miniProviders.includes(id) ? 'checked' : ''}><img src="/brands/${id}.png" alt="" width="20" height="20">${info.name}</label>`).join('')}</div>
     <label class="toggle-row"><span><b>위치 잠금</b><small>잠금을 풀고 미니바 왼쪽 손잡이를 끌어 이동</small></span><input type="checkbox" name="miniLocked" ${data.settings.miniLocked ? 'checked' : ''}></label>
     <p class="settings-hint">클릭: 상세 창 · 우클릭: 위치 잠금/초기화/숨기기. 단기·주간 잔여 한도를 별도로 표시합니다. 현재 미니바는 Windows에서 제공됩니다.</p></fieldset>
@@ -119,7 +205,6 @@ function render() {
   </main>`;
   document.querySelector('#settings')?.addEventListener('click', openSettings);
   document.querySelector('#updates')?.addEventListener('click', openUpdates);
-  document.querySelectorAll('.connect').forEach(b => b.addEventListener('click', openSettings));
   document.querySelector('#dismiss')?.addEventListener('click', dismissSettings);
   document.querySelector('#cancel')?.addEventListener('click', dismissSettings);
   document.querySelector('#dismiss-updates')?.addEventListener('click', dismissUpdates);
@@ -130,13 +215,15 @@ function render() {
   document.querySelector('#confirm-install')?.addEventListener('click', () => void installUpdate());
   document.querySelector('#copy-bridge')?.addEventListener('click', () => void copyBridge(false));
   document.querySelector('#copy-bridge-json')?.addEventListener('click', () => void copyBridge(true));
+  document.querySelector('#check-running-apps')?.addEventListener('click', () => void checkRunningApps());
+  document.querySelector('#settings-form')?.addEventListener('change', updateDetectionStatus);
   document.querySelector('#demo')?.addEventListener('click', () => { demo = !demo; render(); });
   document.querySelector('#close')?.addEventListener('click', () => void getCurrentWindow().close());
   document.querySelector('#refresh')?.addEventListener('click', async () => {
-    notice = ''; snapshot.refreshing = true; render();
-    try { await invoke('refresh_now'); snapshot = await invoke<Snapshot>('get_snapshot'); }
+    notice = ''; snapshot.refreshing = true; updateDashboard();
+    try { await invoke('refresh_now'); receiveSnapshot(await invoke<Snapshot>('get_snapshot')); }
     catch (e) { notice = typeof e === 'string' ? e : '갱신하지 못했습니다.'; snapshot.refreshing = false; }
-    render();
+    updateDashboard();
   });
   document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit', async event => {
     event.preventDefault();
@@ -149,7 +236,7 @@ function render() {
       snapshot = await invoke<Snapshot>('get_snapshot'); settingsOpen = false; settingsDraft = null; notice = '설정을 저장했습니다.';
     } catch (e) { notice = typeof e === 'string' ? e : '설정 저장 실패 · 파일 접근 권한을 확인하세요.'; }
     saving = false; render();
-    if (!settingsOpen) document.querySelector<HTMLButtonElement>('#settings')?.focus();
+    if (!settingsOpen && !flushUpdateRequest()) document.querySelector<HTMLButtonElement>('#settings')?.focus();
   });
   const newDialog = document.querySelector<HTMLDialogElement>('dialog');
   if (newDialog) newDialog.scrollTop = scrollTop;
@@ -169,10 +256,30 @@ async function copyBridge(json: boolean) {
     if (feedback) feedback.textContent = '복사했습니다.';
   } catch { if (feedback) feedback.textContent = '자동 복사 실패 · 위 명령을 직접 복사하세요.'; }
 }
-function openSettings() { updatesOpen = false; installVersion = null; settingsDraft = { ...snapshot.settings, miniProviders: [...snapshot.settings.miniProviders] }; settingsOpen = true; render(); document.querySelector<HTMLButtonElement>('#dismiss')?.focus(); }
-function dismissSettings() { if (saving) return; settingsOpen = false; settingsDraft = null; render(); document.querySelector<HTMLButtonElement>('#settings')?.focus(); }
-function openUpdates() { if (saving) return; settingsOpen = false; settingsDraft = null; updatesOpen = true; installVersion = null; updateNotice = ''; render(); document.querySelector<HTMLButtonElement>('#dismiss-updates')?.focus(); }
+function openSettings() { detectionGeneration++; detectionChecking = false; detectionResult = null; detectionError = ''; updatesOpen = false; installVersion = null; settingsDraft = { ...snapshot.settings, miniProviders: [...snapshot.settings.miniProviders] }; settingsOpen = true; render(); document.querySelector<HTMLButtonElement>('#dismiss')?.focus(); }
+function dismissSettings() { if (saving) return; settingsOpen = false; settingsDraft = null; render(); if (!flushUpdateRequest()) document.querySelector<HTMLButtonElement>('#settings')?.focus(); }
+function openUpdates() { if (saving) return; pendingUpdatesOpen = false; settingsOpen = false; settingsDraft = null; updatesOpen = true; installVersion = null; updateNotice = ''; render(); document.querySelector<HTMLButtonElement>('#dismiss-updates')?.focus(); }
 function dismissUpdates() { updatesOpen = false; installVersion = null; render(); document.querySelector<HTMLButtonElement>('#updates')?.focus(); }
+
+function flushUpdateRequest(): boolean {
+  if (!pendingUpdatesOpen || settingsOpen || saving) return false;
+  pendingUpdatesOpen = false;
+  // Repeated clicks must not reset an open installation confirmation.
+  if (!updatesOpen) openUpdates();
+  return true;
+}
+
+async function consumeUpdateRequest() {
+  try {
+    if (await invoke<boolean>('take_update_request')) {
+      pendingUpdatesOpen = true;
+      flushUpdateRequest();
+    }
+  } catch {
+    notice = '업데이트 창을 열지 못했습니다. 앱의 종 아이콘에서 확인해 주세요.';
+    updateDashboard(false);
+  }
+}
 
 async function openReleasePage() {
   if (!native || updateBusy(snapshot.updates)) return;
@@ -214,14 +321,21 @@ async function installUpdate() {
 }
 
 function receiveSnapshot(next: Snapshot) {
+  const runningChanged = JSON.stringify(snapshot.runningProviders) !== JSON.stringify(next.runningProviders);
   const updateChanged = updateViewKey(snapshot.updates) !== updateViewKey(next.updates);
   snapshot = next;
-  if (settingsOpen || updatesOpen && !updateChanged) return;
   if (installVersion && installVersion !== next.updates.availableVersion) {
     installVersion = null;
     updateNotice = '새 버전 정보가 변경되었습니다. 버전을 확인하고 다시 설치를 선택해 주세요.';
   }
-  render();
+  if (document.hidden) return;
+  if (settingsOpen) {
+    if (runningChanged && !detectionChecking && snapshot.settings.miniEnabled && snapshot.settings.miniOnlyWhenRunning) { detectionResult = null; detectionError = ''; }
+    updateDetectionStatus(); return;
+  }
+  if (updatesOpen && !updateChanged) return;
+  if (updatesOpen) render();
+  else updateDashboard();
 }
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
@@ -236,12 +350,28 @@ document.addEventListener('keydown', event => {
   }
 });
 
+app.addEventListener('click', event => {
+  if (event.target instanceof Element && event.target.closest('.connect')) openSettings();
+});
+document.addEventListener('visibilitychange', () => {
+  stopViewAnimations(app);
+  if (!document.hidden) {
+    if (settingsOpen || updatesOpen) render();
+    else updateDashboard(false);
+  }
+});
+reducedMotion.addEventListener('change', () => {
+  if (reducedMotion.matches) stopViewAnimations(app);
+});
+
 render();
 async function connectDesktop() {
   if (!native) return;
   // Subscribe before reading to avoid dropping a refresh that completes during startup.
   await listen<Snapshot>('quota-updated', event => receiveSnapshot(event.payload));
+  await listen('open-updates', () => void consumeUpdateRequest());
   try { receiveSnapshot(await invoke<Snapshot>('get_snapshot')); }
   catch { notice = '사용량을 읽지 못했습니다. 앱을 다시 실행해 주세요.'; render(); }
+  await consumeUpdateRequest();
 }
 void connectDesktop();
